@@ -7,33 +7,36 @@ import (
 
 	"context"
 	"fmt"
-	"os"
+	"io"
+	"log"
 	"os/exec"
 )
 
 type CmdCloser struct {
 	ctx context.Context
 
-	reader *os.File
-	writer *os.File
 	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
 }
 
-func NewCmdCloser(ctx context.Context, cmd string) (*CmdCloser, error) {
-	reader, writer, err := os.Pipe()
+func NewCmdCloser(ctx context.Context, cmdStr string) (*CmdCloser, error) {
+	cmd := exec.CommandContext(ctx, cmdStr)
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create LSP io pipe: %s", err)
+		return nil, fmt.Errorf("failed to make stdin pipe: %s", err)
 	}
 
-	res := exec.CommandContext(ctx, cmd)
-	res.Stdout = writer
-	res.Stdin = reader
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to make stdout pipe: %s", err)
+	}
 
 	return &CmdCloser{
 		ctx:    ctx,
-		reader: reader,
-		writer: writer,
-		cmd:    res,
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: stdout,
 	}, nil
 }
 
@@ -46,25 +49,31 @@ func (cmd CmdCloser) Close() error {
 }
 
 func (cmd CmdCloser) Read(p []byte) (n int, err error) {
-	return cmd.reader.Read(p)
+	return cmd.stdout.Read(p)
 }
 
 func (cmd CmdCloser) Write(p []byte) (n int, err error) {
-	return cmd.writer.Write(p)
+	return cmd.stdin.Write(p)
 }
 
 func main() {
 	ctx := context.Background()
 
-	os.Pipe
+	logger, err := zap.NewProduction()
+	if err != nil {
+		log.Fatalf("failed to make logger: %s", err)
+	}
+	defer logger.Sync()
 
-	proc := exec.CommandContext(ctx, "clangd")
+	proc, err := NewCmdCloser(ctx, "clangd")
+	if err != nil {
+		log.Fatalf("failed to run C lsp: %s", err)
+	}
 
 	stream := jsonrpc2.NewStream(proc)
 	conn := jsonrpc2.NewConn(stream)
 
-	logger := zap.L()
 	client := protocol.ClientDispatcher(conn, logger)
 
-	logger.Info("hi client: %s", client)
+	logger.Info("hi client", zap.Any("client", client))
 }
