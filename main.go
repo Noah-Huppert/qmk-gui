@@ -3,12 +3,16 @@ package main
 import (
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 	"go.uber.org/zap"
 
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 type CmdCloser struct {
@@ -41,17 +45,6 @@ func NewCmdCloser(parentCtx context.Context, logger *zap.Logger, cmdStr string) 
 		return nil, fmt.Errorf("failed to run lsp: %s", err)
 	}
 
-	/* cmd.std
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancelCtx()
-		return nil, fmt.Errorf("failed to make stderr pipe: %s", err)
-	}
-
-	go func() {
-		stderr.Read()
-	}()
-	*/
 	return &CmdCloser{
 		cancelCtx: cancelCtx,
 		logger:    logger,
@@ -63,26 +56,28 @@ func NewCmdCloser(parentCtx context.Context, logger *zap.Logger, cmdStr string) 
 
 func (cmd CmdCloser) Close() error {
 	cmd.cancelCtx()
-	cmd.logger.Debug("closed")
 	return nil
 }
 
 func (cmd CmdCloser) Read(p []byte) (n int, err error) {
-	cmd.logger.Debug("read called")
-	n, err = cmd.stdout.Read(p)
-	cmd.logger.Debug("read", zap.ByteString("p", p), zap.Int("n", n), zap.Error(err))
-	if err != nil {
-		return n, err
-	}
-	return n, err
+	return cmd.stdout.Read(p)
 }
 
 func (cmd CmdCloser) Write(p []byte) (n int, err error) {
-	cmd.logger.Debug("write", zap.ByteString("p", p))
 	return cmd.stdin.Write(p)
 }
 
+type ClientHandler struct {
+	logger *zap.Logger
+}
+
+func (h ClientHandler) Handle(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+	h.logger.Debug("received response over connection", zap.Any("req", req))
+	return nil
+}
+
 func main() {
+	// Setup context and logger
 	ctx := context.Background()
 
 	logger, err := zap.NewDevelopment()
@@ -91,9 +86,10 @@ func main() {
 	}
 	defer logger.Sync()
 
+	// Start LSP server
 	proc, err := NewCmdCloser(ctx, logger, "clangd")
 	if err != nil {
-		logger.Fatal("failed to run C lsp", zap.Error(err))
+		logger.Fatal("failed to run C LSP", zap.Error(err))
 	}
 
 	logger.Info("running lsp")
@@ -101,13 +97,70 @@ func main() {
 	stream := jsonrpc2.NewStream(proc)
 	conn := jsonrpc2.NewConn(stream)
 
+	go func() {
+		handler := ClientHandler{
+			logger: logger,
+		}
+		conn.Go(ctx, handler.Handle)
+	}()
+
 	client := protocol.ServerDispatcher(conn, logger)
 
-	logger.Info("listing folders")
-	folders, err := client.Initialize(ctx, &protocol.InitializeParams{})
+	// Initialize LSP
+	logger.Info("initializing C LSP")
+
+	cwd, err := os.Getwd()
 	if err != nil {
-		logger.Fatal("failed to list folders", zap.Error(err))
+		logger.Fatal("failed to get working directory", zap.Error(err))
 	}
 
-	logger.Info("folders", zap.Any("folders", folders))
+	qmkFirmwareDir := filepath.Join(cwd, "../qmk_firmware")
+
+	_, err = client.Initialize(ctx, &protocol.InitializeParams{
+		ClientInfo: &protocol.ClientInfo{
+			Name:    "qmk-gui",
+			Version: "pre-alpha",
+		},
+		Locale: "en",
+		Capabilities: protocol.ClientCapabilities{
+			Workspace: &protocol.WorkspaceClientCapabilities{
+				WorkspaceFolders: true,
+			},
+		},
+		WorkspaceFolders: []protocol.WorkspaceFolder{
+			{
+				Name: "qmk_firmware",
+				URI:  fmt.Sprintf("file://%s", qmkFirmwareDir),
+			},
+		},
+	})
+	if err != nil {
+		logger.Fatal("failed to initialize C LSP", zap.Error(err))
+	}
+
+	logger.Info("initialized C LSP")
+
+	keymapCFilePath := filepath.Join(qmkFirmwareDir, "keyboards/moonlander/keymaps/default/keymap.c")
+	keymapCFileBytes, err := os.ReadFile(keymapCFilePath)
+	if err != nil {
+		logger.Fatal("failed to read keymap.c file", zap.Error(err))
+	}
+	keymapCFile := bytes.NewBuffer(keymapCFileBytes).String()
+
+	logger.Debug("keymap.c", zap.String("contents", keymapCFile))
+
+	client.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{
+			URI:        uri.File(keymapCFilePath),
+			LanguageID: "c",
+			Version:    0,
+			Text:       keymapCFile,
+		},
+	})
+
+	symbols, err := client.Symbols(ctx, &protocol.WorkspaceSymbolParams{})
+	if err != nil {
+		logger.Fatal("failed to list symbols", zap.Error(err))
+	}
+	logger.Debug("retrieved symbols", zap.Any("symbols", symbols))
 }
