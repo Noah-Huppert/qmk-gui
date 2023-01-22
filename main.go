@@ -125,6 +125,17 @@ func main() {
 		Capabilities: protocol.ClientCapabilities{
 			Workspace: &protocol.WorkspaceClientCapabilities{
 				WorkspaceFolders: true,
+				Symbol: &protocol.WorkspaceSymbolClientCapabilities{
+					SymbolKind: &protocol.SymbolKindCapabilities{
+						ValueSet: []protocol.SymbolKind{
+							protocol.SymbolKindVariable,
+							protocol.SymbolKindEnum,
+						},
+					},
+				},
+			},
+			TextDocument: &protocol.TextDocumentClientCapabilities{
+				Synchronization: &protocol.TextDocumentSyncClientCapabilities{},
 			},
 		},
 		WorkspaceFolders: []protocol.WorkspaceFolder{
@@ -146,21 +157,36 @@ func main() {
 		logger.Fatal("failed to read keymap.c file", zap.Error(err))
 	}
 	keymapCFile := bytes.NewBuffer(keymapCFileBytes).String()
-
-	logger.Debug("keymap.c", zap.String("contents", keymapCFile))
+	keymapCURI := uri.File(keymapCFilePath)
 
 	client.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
-			URI:        uri.File(keymapCFilePath),
+			URI:        keymapCURI,
 			LanguageID: "c",
 			Version:    0,
 			Text:       keymapCFile,
 		},
 	})
 
-	symbols, err := client.Symbols(ctx, &protocol.WorkspaceSymbolParams{})
+	symbols, err := client.Symbols(ctx, &protocol.WorkspaceSymbolParams{
+		Query: "",
+	})
 	if err != nil {
 		logger.Fatal("failed to list symbols", zap.Error(err))
 	}
 	logger.Debug("retrieved symbols", zap.Any("symbols", symbols))
+
+	// Cleanup server
+	err = client.DidClose(ctx, &protocol.DidCloseTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{
+			URI: keymapCURI,
+		},
+	})
+	if err != nil {
+		logger.Fatal("failed to send close event for keymap.c", zap.Error(err))
+	}
+
+	if err = client.Exit(ctx); err != nil {
+		logger.Fatal("failed to exit C LSP", zap.Error(err))
+	}
 }
