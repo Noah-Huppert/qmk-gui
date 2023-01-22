@@ -151,6 +151,7 @@ func main() {
 
 	logger.Info("initialized C LSP")
 
+	// Open file
 	keymapCFilePath := filepath.Join(qmkFirmwareDir, "keyboards/moonlander/keymaps/default/keymap.c")
 	keymapCFileBytes, err := os.ReadFile(keymapCFilePath)
 	if err != nil {
@@ -168,8 +169,10 @@ func main() {
 		},
 	})
 
-	symbols, err := client.Symbols(ctx, &protocol.WorkspaceSymbolParams{
-		Query: "",
+	symbols, err := client.DocumentSymbol(ctx, &protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{
+			URI: keymapCURI,
+		},
 	})
 	if err != nil {
 		logger.Fatal("failed to list symbols", zap.Error(err))
