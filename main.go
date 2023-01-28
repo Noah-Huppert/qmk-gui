@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -9,70 +11,106 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/Noah-Huppert/qmk-gui/cmd"
 )
 
-type CmdCloser struct {
-	cancelCtx context.CancelFunc
-	logger    *zap.Logger
-
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-}
-
-func NewCmdCloser(parentCtx context.Context, logger *zap.Logger, cmdStr string) (*CmdCloser, error) {
-	ctx, cancelCtx := context.WithCancel(parentCtx)
-
-	cmd := exec.CommandContext(ctx, cmdStr)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		cancelCtx()
-		return nil, fmt.Errorf("failed to make stdin pipe: %s", err)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancelCtx()
-		return nil, fmt.Errorf("failed to make stdout pipe: %s", err)
-	}
-
-	if err = cmd.Start(); err != nil {
-		cancelCtx()
-		return nil, fmt.Errorf("failed to run lsp: %s", err)
-	}
-
-	return &CmdCloser{
-		cancelCtx: cancelCtx,
-		logger:    logger,
-		cmd:       cmd,
-		stdin:     stdin,
-		stdout:    stdout,
-	}, nil
-}
-
-func (cmd CmdCloser) Close() error {
-	cmd.cancelCtx()
-	return nil
-}
-
-func (cmd CmdCloser) Read(p []byte) (n int, err error) {
-	return cmd.stdout.Read(p)
-}
-
-func (cmd CmdCloser) Write(p []byte) (n int, err error) {
-	return cmd.stdin.Write(p)
-}
-
+// JSON RPC connection handler.
 type ClientHandler struct {
 	logger *zap.Logger
 }
 
+// A handler for JSON RPC responses which just logs the request.
 func (h ClientHandler) Handle(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
 	h.logger.Debug("received response over connection", zap.Any("req", req))
+	return nil
+}
+
+// Wraps the LSP did open and did close flow.
+type LSPDocument struct {
+	server protocol.Server
+	uri    uri.URI
+}
+
+// Opens a file.
+func (doc LSPDocument) Open(ctx context.Context) error {
+	// Read file
+	fileBytes, err := os.ReadFile(doc.uri.Filename())
+	if err != nil {
+		return fmt.Errorf("failed to read file contents: %s", err)
+	}
+	fileContents := bytes.NewBuffer(fileBytes).String()
+
+	// Call LSP open
+	err = doc.server.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{
+			URI:        doc.uri,
+			LanguageID: "c",
+			Version:    0,
+			Text:       fileContents,
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to call LSP open: %s", err)
+	}
+
+	return nil
+}
+
+// Closes a document.
+func (doc LSPDocument) Close(ctx context.Context) error {
+	err := doc.server.DidClose(ctx, &protocol.DidCloseTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{
+			URI: doc.uri,
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to call LSP close: %s", err)
+	}
+
+	return nil
+}
+
+// Collection of documents.
+type LSPDocumentCollection struct {
+	server    protocol.Server
+	documents []LSPDocument
+}
+
+// Open a file
+func (coll LSPDocumentCollection) Open(ctx context.Context, uri uri.URI) error {
+	doc := LSPDocument{
+		server: coll.server,
+		uri:    uri,
+	}
+	if err := doc.Open(ctx); err != nil {
+		return fmt.Errorf("failed to open document: %s", err)
+	}
+
+	coll.documents = append(coll.documents, doc)
+
+	return nil
+}
+
+func (coll LSPDocumentCollection) CloseAll(ctx context.Context) error {
+	errs := []string{}
+
+	for _, doc := range coll.documents {
+		if err := doc.Close(ctx); err != nil {
+			errs = append(errs, fmt.Sprintf("failed to close %s: %s", doc.uri, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, ", "))
+	}
+
 	return nil
 }
 
@@ -87,7 +125,7 @@ func main() {
 	defer logger.Sync()
 
 	// Start LSP server
-	proc, err := NewCmdCloser(ctx, logger, "clangd")
+	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd")
 	if err != nil {
 		logger.Fatal("failed to run C LSP", zap.Error(err))
 	}
@@ -104,7 +142,12 @@ func main() {
 		conn.Go(ctx, handler.Handle)
 	}()
 
-	client := protocol.ServerDispatcher(conn, logger)
+	//client := protocol.ClientDispatcher(conn, logger)
+	server := protocol.ServerDispatcher(conn, logger)
+	docColl := LSPDocumentCollection{
+		server:    server,
+		documents: []LSPDocument{},
+	}
 
 	// Initialize LSP
 	logger.Info("initializing C LSP")
@@ -116,7 +159,7 @@ func main() {
 
 	qmkFirmwareDir := filepath.Join(cwd, "../qmk_firmware")
 
-	_, err = client.Initialize(ctx, &protocol.InitializeParams{
+	_, err = server.Initialize(ctx, &protocol.InitializeParams{
 		ClientInfo: &protocol.ClientInfo{
 			Name:    "qmk-gui",
 			Version: "pre-alpha",
@@ -126,6 +169,7 @@ func main() {
 			Workspace: &protocol.WorkspaceClientCapabilities{
 				WorkspaceFolders: true,
 				Symbol: &protocol.WorkspaceSymbolClientCapabilities{
+					DynamicRegistration: true,
 					SymbolKind: &protocol.SymbolKindCapabilities{
 						ValueSet: []protocol.SymbolKind{
 							protocol.SymbolKindVariable,
@@ -135,7 +179,15 @@ func main() {
 				},
 			},
 			TextDocument: &protocol.TextDocumentClientCapabilities{
-				Synchronization: &protocol.TextDocumentSyncClientCapabilities{},
+				Synchronization: &protocol.TextDocumentSyncClientCapabilities{
+					DynamicRegistration: true,
+				},
+				PublishDiagnostics: &protocol.PublishDiagnosticsClientCapabilities{
+					RelatedInformation:     true,
+					VersionSupport:         true,
+					CodeDescriptionSupport: true,
+					DataSupport:            true,
+				},
 			},
 		},
 		WorkspaceFolders: []protocol.WorkspaceFolder{
@@ -148,48 +200,43 @@ func main() {
 	if err != nil {
 		logger.Fatal("failed to initialize C LSP", zap.Error(err))
 	}
+	if err = server.Initialized(ctx, nil); err != nil {
+		logger.Fatal("failed to send initialized notification", zap.Error(err))
+	}
 
 	logger.Info("initialized C LSP")
 
 	// Open file
 	keymapCFilePath := filepath.Join(qmkFirmwareDir, "keyboards/moonlander/keymaps/default/keymap.c")
-	keymapCFileBytes, err := os.ReadFile(keymapCFilePath)
-	if err != nil {
-		logger.Fatal("failed to read keymap.c file", zap.Error(err))
-	}
-	keymapCFile := bytes.NewBuffer(keymapCFileBytes).String()
 	keymapCURI := uri.File(keymapCFilePath)
+	docColl.Open(ctx, keymapCURI)
 
-	client.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{
-		TextDocument: protocol.TextDocumentItem{
-			URI:        keymapCURI,
-			LanguageID: "c",
-			Version:    0,
-			Text:       keymapCFile,
-		},
-	})
-
-	symbols, err := client.DocumentSymbol(ctx, &protocol.DocumentSymbolParams{
+	/* symbols, err := client.DocumentSymbol(ctx, &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
 			URI: keymapCURI,
 		},
+	}) */
+	symbols, err := server.Symbols(ctx, &protocol.WorkspaceSymbolParams{
+		Query: "",
 	})
 	if err != nil {
 		logger.Fatal("failed to list symbols", zap.Error(err))
 	}
-	logger.Debug("retrieved symbols", zap.Any("symbols", symbols))
+
+	logger.Info("symbols", zap.Any("symbols", symbols))
 
 	// Cleanup server
-	err = client.DidClose(ctx, &protocol.DidCloseTextDocumentParams{
-		TextDocument: protocol.TextDocumentIdentifier{
-			URI: keymapCURI,
-		},
-	})
-	if err != nil {
-		logger.Fatal("failed to send close event for keymap.c", zap.Error(err))
+	time.Sleep(time.Second * 10)
+
+	if err := docColl.CloseAll(ctx); err != nil {
+		logger.Fatal("failed to send close events for documents: %s", zap.Error(err))
 	}
 
-	if err = client.Exit(ctx); err != nil {
+	if err = server.Shutdown(ctx); err != nil {
+		logger.Fatal("failed to shutdown C LSP", zap.Error(err))
+	}
+
+	if err = server.Exit(ctx); err != nil {
 		logger.Fatal("failed to exit C LSP", zap.Error(err))
 	}
 }
