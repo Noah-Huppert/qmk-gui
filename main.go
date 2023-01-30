@@ -167,7 +167,7 @@ func main() {
 				Name:    "qmk-gui",
 				Version: "pre-alpha",
 			},
-			Locale: "en",
+			Locale: "en-us",
 			Capabilities: protocol.ClientCapabilities{
 				Workspace: &protocol.WorkspaceClientCapabilities{
 					WorkspaceFolders: true,
@@ -245,6 +245,14 @@ func main() {
 		logger.Debug("LSP server has AST capability")
 	}
 
+	if workspaceSymbolProvider, ok := initRes.InitializeResult.Capabilities.WorkspaceSymbolProvider.(bool); ok {
+		if !workspaceSymbolProvider {
+			logger.Fatal("LSP server does not have workspace symbols capability", zap.Any("initRes.InitializeResult", initRes.InitializeResult))
+		} else {
+			logger.Debug("LSP server has workspace symbols capability")
+		}
+	}
+
 	if err = server.Initialized(ctx, nil); err != nil {
 		logger.Fatal("failed to send initialized notification", zap.Error(err))
 	}
@@ -285,8 +293,12 @@ func main() {
 			URI: keymapCURI,
 		},
 	}) */
+	//time.Sleep(time.Second * 5)
 	symbols, err := server.Symbols(ctx, &protocol.WorkspaceSymbolParams{
-		Query: "",
+		Query: "KC",
+		WorkDoneProgressParams: protocol.WorkDoneProgressParams{
+			WorkDoneToken: protocol.NewProgressToken("symbols"),
+		},
 	})
 	if err != nil {
 		logger.Fatal("failed to list symbols", zap.Error(err))

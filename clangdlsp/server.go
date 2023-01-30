@@ -2,7 +2,9 @@ package clangdlsp
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/segmentio/encoding/json"
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
 	"go.uber.org/zap"
@@ -54,12 +56,26 @@ type ServerCapabilities struct {
 }
 
 func (server ClangdServer) Initialize(ctx context.Context, params *InitializeParams) (*InitializeResult, error) {
+	// Make request
+	var ifaceRes interface{}
 	res := InitializeResult{}
-	server.logger.Debug("call "+protocol.MethodInitialize, zap.Any("params", params))
-	err := protocol.Call(ctx, server.conn, protocol.MethodInitialize, params, &res)
 
+	server.logger.Debug("call "+protocol.MethodInitialize, zap.Any("params", params))
+	err := protocol.Call(ctx, server.conn, protocol.MethodInitialize, params, &ifaceRes)
 	if err != nil {
 		return nil, err
+	}
+
+	// Deserialize into embedded struct
+	marshalledRes, err := json.Marshal(ifaceRes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-marshall response: %s", err)
+	}
+	if err = json.Unmarshal(marshalledRes, &res); err != nil {
+		return nil, fmt.Errorf("failed to unmarshall response into base struct: %s", err)
+	}
+	if err = json.Unmarshal(marshalledRes, &(res.InitializeResult)); err != nil {
+		return nil, fmt.Errorf("failed to unmarshall response into embedded struct: %s", err)
 	}
 	return &res, nil
 }
