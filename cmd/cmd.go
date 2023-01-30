@@ -20,10 +20,10 @@ type CmdCloser struct {
 }
 
 // Creates a new CmdCloser.
-func NewCmdCloser(parentCtx context.Context, logger *zap.Logger, cmdStr string) (*CmdCloser, error) {
+func NewCmdCloser(parentCtx context.Context, logger *zap.Logger, cmdStr string, cmdArgs []string) (*CmdCloser, error) {
 	ctx, cancelCtx := context.WithCancel(parentCtx)
 
-	cmd := exec.CommandContext(ctx, cmdStr)
+	cmd := exec.CommandContext(ctx, cmdStr, cmdArgs...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancelCtx()

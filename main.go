@@ -126,7 +126,7 @@ func main() {
 	defer logger.Sync()
 
 	// Start LSP server
-	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd")
+	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd", []string{})
 	if err != nil {
 		logger.Fatal("failed to run C LSP", zap.Error(err))
 	}
@@ -145,7 +145,7 @@ func main() {
 
 	//client := protocol.ClientDispatcher(conn, logger)
 	//server := protocol.ServerDispatcher(conn, logger)
-	server := clangdlsp.NewClangDServer(conn, logger)
+	server := clangdlsp.NewClangdServer(conn, logger)
 	docColl := LSPDocumentCollection{
 		server:    server.Server,
 		documents: []LSPDocument{},
@@ -161,7 +161,7 @@ func main() {
 
 	qmkFirmwareDir := filepath.Join(cwd, "../qmk_firmware")
 
-	_, err = server.Initialize(ctx, &clangdlsp.ClangDInitializeParams{
+	initRes, err := server.Initialize(ctx, &clangdlsp.InitializeParams{
 		InitializeParams: protocol.InitializeParams{
 			ClientInfo: &protocol.ClientInfo{
 				Name:    "qmk-gui",
@@ -200,11 +200,20 @@ func main() {
 				},
 			},
 		},
-		ClangdFileStatus: true,
+		Capabilities: clangdlsp.ClientCapabilities{
+			ClangdFileStatus: true,
+		},
 	})
 	if err != nil {
 		logger.Fatal("failed to initialize C LSP", zap.Error(err))
 	}
+
+	if !initRes.ServerCapabilities.ASTProvider {
+		logger.Fatal("LSP server does not have AST capability", zap.Any("initRes", initRes))
+	} else {
+		logger.Debug("LSP server has AST capability")
+	}
+
 	if err = server.Initialized(ctx, nil); err != nil {
 		logger.Fatal("failed to send initialized notification", zap.Error(err))
 	}
@@ -255,7 +264,7 @@ func main() {
 	logger.Info("symbols", zap.Any("symbols", symbols))
 
 	// Cleanup server
-	time.Sleep(time.Second * 2)
+	time.Sleep(time.Second * 10)
 
 	if err := docColl.CloseAll(ctx); err != nil {
 		logger.Fatal("failed to send close events for documents: %s", zap.Error(err))
