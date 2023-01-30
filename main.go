@@ -29,23 +29,30 @@ type ClientHandler struct {
 
 // A handler for JSON RPC responses which just logs the request.
 func (h ClientHandler) Handle(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+	// Handle known notifications
 	if req.Method() == protocol.MethodProgress {
+		// Progress notification
 		params := protocol.ProgressParams{}
 		if err := json.Unmarshal(req.Params(), &params); err != nil {
 			return fmt.Errorf("failed to unmarshall progress notification params: %s", err)
 		}
 
+		// Handle known progress tokens
 		if params.Token.String() == clangdlsp.ProgressTokenBackgroundIndexProgress {
+			// Clangd background index progress
 			bgIdxParams := clangdlsp.BackgroundIndexProgressParams{}
 			if err := json.Unmarshal(req.Params(), &bgIdxParams); err != nil {
 				return fmt.Errorf("failed to unmarshall background index progress params: %s", err)
 			}
 
+			// Send message on channel if the background indexing is complete
 			if bgIdxParams.Value.Kind == clangdlsp.BackgroundIndexProgressEnd {
 				h.backgroundIndexDone <- 0
 			}
 		}
 	}
+
+	// Reply with null to meat JSON spec
 	h.logger.Debug("received response over connection", zap.Any("req", req))
 	return reply(ctx, nil, nil)
 }
@@ -166,7 +173,6 @@ func main() {
 	}()
 
 	//client := protocol.ClientDispatcher(conn, logger)
-	//server := protocol.ServerDispatcher(conn, logger)
 	server := clangdlsp.NewClangdServer(conn, logger)
 	docColl := LSPDocumentCollection{
 		server:    server.Server,
@@ -261,6 +267,7 @@ func main() {
 		logger.Fatal("failed to initialize C LSP", zap.Error(err))
 	}
 
+	// Check for required LSP capabilities
 	if !initRes.ServerCapabilities.ASTProvider {
 		logger.Fatal("LSP server does not have AST capability", zap.Any("initRes", initRes))
 	} else {
@@ -315,7 +322,8 @@ func main() {
 			URI: keymapCURI,
 		},
 	}) */
-	//time.Sleep(time.Second * 5)
+	// Search for symbols
+	// Doesn't seem like a blank search can be provided
 	<-backgroundIndexDone
 	symbols, err := server.Symbols(ctx, &protocol.WorkspaceSymbolParams{
 		Query: "KC",
