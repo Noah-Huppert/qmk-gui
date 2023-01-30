@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 
 	"go.lsp.dev/jsonrpc2"
@@ -22,11 +23,29 @@ import (
 
 // JSON RPC connection handler.
 type ClientHandler struct {
-	logger *zap.Logger
+	logger              *zap.Logger
+	backgroundIndexDone chan int
 }
 
 // A handler for JSON RPC responses which just logs the request.
 func (h ClientHandler) Handle(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+	if req.Method() == protocol.MethodProgress {
+		params := protocol.ProgressParams{}
+		if err := json.Unmarshal(req.Params(), &params); err != nil {
+			return fmt.Errorf("failed to unmarshall progress notification params: %s", err)
+		}
+
+		if params.Token.String() == clangdlsp.ProgressTokenBackgroundIndexProgress {
+			bgIdxParams := clangdlsp.BackgroundIndexProgressParams{}
+			if err := json.Unmarshal(req.Params(), &bgIdxParams); err != nil {
+				return fmt.Errorf("failed to unmarshall background index progress params: %s", err)
+			}
+
+			if bgIdxParams.Value.Kind == clangdlsp.BackgroundIndexProgressEnd {
+				h.backgroundIndexDone <- 0
+			}
+		}
+	}
 	h.logger.Debug("received response over connection", zap.Any("req", req))
 	return reply(ctx, nil, nil)
 }
@@ -136,9 +155,12 @@ func main() {
 	stream := jsonrpc2.NewStream(proc)
 	conn := jsonrpc2.NewConn(stream)
 
+	backgroundIndexDone := make(chan int)
+
 	go func() {
 		handler := ClientHandler{
-			logger: logger,
+			logger:              logger,
+			backgroundIndexDone: backgroundIndexDone,
 		}
 		conn.Go(ctx, handler.Handle)
 	}()
@@ -294,6 +316,7 @@ func main() {
 		},
 	}) */
 	//time.Sleep(time.Second * 5)
+	<-backgroundIndexDone
 	symbols, err := server.Symbols(ctx, &protocol.WorkspaceSymbolParams{
 		Query: "KC",
 		WorkDoneProgressParams: protocol.WorkDoneProgressParams{

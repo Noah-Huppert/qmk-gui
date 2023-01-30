@@ -10,6 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	ProgressTokenBackgroundIndexProgress string = "backgroundIndexProgress"
+)
+
 // Language server client for the clangd language server. Implements methods to access LSP extensions which the ClangD server adds.
 // ClangD extension: https://clangd.llvm.org/extensions
 type ClangdServer struct {
@@ -78,4 +82,32 @@ func (server ClangdServer) Initialize(ctx context.Context, params *InitializePar
 		return nil, fmt.Errorf("failed to unmarshall response into embedded struct: %s", err)
 	}
 	return &res, nil
+}
+
+type BackgroundIndexProgressKind string
+
+const (
+	BackgroundIndexProgressBegin  BackgroundIndexProgressKind = "begin"
+	BackgroundIndexProgressReport BackgroundIndexProgressKind = "report"
+	BackgroundIndexProgressEnd    BackgroundIndexProgressKind = "end"
+)
+
+type BackgroundIndexProgressParams struct {
+	Value struct {
+		Kind BackgroundIndexProgressKind `json:"kind"`
+	} `json:"value"`
+}
+
+type BackgroundIndexProgressBeginParams struct {
+	Value struct {
+		Percentage int    `json:"percentage"`
+		Title      string `json:"title"`
+	} `json:"value"`
+}
+
+type BackgroundIndexProgressReportParams struct {
+	Value struct {
+		Message    string `json:"message"`
+		Percentage int    `json:"percentage"`
+	} `json:"value"`
 }
