@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Noah-Huppert/qmk-gui/clangdlsp"
 	"github.com/Noah-Huppert/qmk-gui/cmd"
 )
 
@@ -143,9 +144,10 @@ func main() {
 	}()
 
 	//client := protocol.ClientDispatcher(conn, logger)
-	server := protocol.ServerDispatcher(conn, logger)
+	//server := protocol.ServerDispatcher(conn, logger)
+	server := clangdlsp.NewClangDServer(conn, logger)
 	docColl := LSPDocumentCollection{
-		server:    server,
+		server:    server.Server,
 		documents: []LSPDocument{},
 	}
 
@@ -159,43 +161,46 @@ func main() {
 
 	qmkFirmwareDir := filepath.Join(cwd, "../qmk_firmware")
 
-	_, err = server.Initialize(ctx, &protocol.InitializeParams{
-		ClientInfo: &protocol.ClientInfo{
-			Name:    "qmk-gui",
-			Version: "pre-alpha",
-		},
-		Locale: "en",
-		Capabilities: protocol.ClientCapabilities{
-			Workspace: &protocol.WorkspaceClientCapabilities{
-				WorkspaceFolders: true,
-				Symbol: &protocol.WorkspaceSymbolClientCapabilities{
-					DynamicRegistration: true,
-					SymbolKind: &protocol.SymbolKindCapabilities{
-						ValueSet: []protocol.SymbolKind{
-							protocol.SymbolKindVariable,
-							protocol.SymbolKindEnum,
+	_, err = server.Initialize(ctx, &clangdlsp.ClangDInitializeParams{
+		InitializeParams: protocol.InitializeParams{
+			ClientInfo: &protocol.ClientInfo{
+				Name:    "qmk-gui",
+				Version: "pre-alpha",
+			},
+			Locale: "en",
+			Capabilities: protocol.ClientCapabilities{
+				Workspace: &protocol.WorkspaceClientCapabilities{
+					WorkspaceFolders: true,
+					Symbol: &protocol.WorkspaceSymbolClientCapabilities{
+						DynamicRegistration: true,
+						SymbolKind: &protocol.SymbolKindCapabilities{
+							ValueSet: []protocol.SymbolKind{
+								protocol.SymbolKindVariable,
+								protocol.SymbolKindEnum,
+							},
 						},
 					},
 				},
-			},
-			TextDocument: &protocol.TextDocumentClientCapabilities{
-				Synchronization: &protocol.TextDocumentSyncClientCapabilities{
-					DynamicRegistration: true,
+				TextDocument: &protocol.TextDocumentClientCapabilities{
+					Synchronization: &protocol.TextDocumentSyncClientCapabilities{
+						DynamicRegistration: true,
+					},
+					PublishDiagnostics: &protocol.PublishDiagnosticsClientCapabilities{
+						RelatedInformation:     true,
+						VersionSupport:         true,
+						CodeDescriptionSupport: true,
+						DataSupport:            true,
+					},
 				},
-				PublishDiagnostics: &protocol.PublishDiagnosticsClientCapabilities{
-					RelatedInformation:     true,
-					VersionSupport:         true,
-					CodeDescriptionSupport: true,
-					DataSupport:            true,
+			},
+			WorkspaceFolders: []protocol.WorkspaceFolder{
+				{
+					Name: "qmk_firmware",
+					URI:  fmt.Sprintf("file://%s", qmkFirmwareDir),
 				},
 			},
 		},
-		WorkspaceFolders: []protocol.WorkspaceFolder{
-			{
-				Name: "qmk_firmware",
-				URI:  fmt.Sprintf("file://%s", qmkFirmwareDir),
-			},
-		},
+		ClangdFileStatus: true,
 	})
 	if err != nil {
 		logger.Fatal("failed to initialize C LSP", zap.Error(err))
@@ -209,7 +214,31 @@ func main() {
 	// Open file
 	keymapCFilePath := filepath.Join(qmkFirmwareDir, "keyboards/moonlander/keymaps/default/keymap.c")
 	keymapCURI := uri.File(keymapCFilePath)
-	docColl.Open(ctx, keymapCURI)
+	if err = docColl.Open(ctx, keymapCURI); err != nil {
+		logger.Fatal("failed to open keymap.c", zap.Error(err))
+	}
+
+	/* link, err := server.DocumentLink(ctx, &protocol.DocumentLinkParams{
+		TextDocument: protocol.TextDocumentIdentifier{
+			URI: keymapCURI,
+		},
+	})
+	if err != nil {
+		logger.Fatal("failed to get document links", zap.Error(err))
+	}
+
+	logger.Debug("document links", zap.Any("link", link)) */
+	/* bgIdxTok := protocol.NewProgressToken("backgroundIndexProgress")
+	err = client.WorkDoneProgressCreate(ctx, &protocol.WorkDoneProgressCreateParams{
+		Token: *bgIdxTok,
+	})
+	if err != nil {
+		logger.Fatal("failed to create background index progress token", zap.Error(err))
+	} */
+
+	/* client.Progress(ctx, &protocol.ProgressParams{
+		Token: *bgIdxTok,
+	}) */
 
 	/* symbols, err := client.DocumentSymbol(ctx, &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -226,7 +255,7 @@ func main() {
 	logger.Info("symbols", zap.Any("symbols", symbols))
 
 	// Cleanup server
-	time.Sleep(time.Second * 10)
+	time.Sleep(time.Second * 2)
 
 	if err := docColl.CloseAll(ctx); err != nil {
 		logger.Fatal("failed to send close events for documents: %s", zap.Error(err))
