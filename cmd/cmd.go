@@ -50,6 +50,10 @@ func NewCmdCloser(parentCtx context.Context, logger *zap.Logger, cmdStr string, 
 	}, nil
 }
 
+func (cmd CmdCloser) Pid() int {
+	return cmd.cmd.Process.Pid
+}
+
 // Stop the command execution.
 func (cmd CmdCloser) Close() error {
 	cmd.cancelCtx()

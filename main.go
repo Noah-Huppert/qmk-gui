@@ -28,7 +28,7 @@ type ClientHandler struct {
 // A handler for JSON RPC responses which just logs the request.
 func (h ClientHandler) Handle(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
 	h.logger.Debug("received response over connection", zap.Any("req", req))
-	return nil
+	return reply(ctx, nil, nil)
 }
 
 // Wraps the LSP did open and did close flow.
@@ -171,15 +171,45 @@ func main() {
 			Capabilities: protocol.ClientCapabilities{
 				Workspace: &protocol.WorkspaceClientCapabilities{
 					WorkspaceFolders: true,
+					SemanticTokens: &protocol.SemanticTokensWorkspaceClientCapabilities{
+						RefreshSupport: true,
+					},
 					Symbol: &protocol.WorkspaceSymbolClientCapabilities{
 						DynamicRegistration: true,
 						SymbolKind: &protocol.SymbolKindCapabilities{
 							ValueSet: []protocol.SymbolKind{
-								protocol.SymbolKindVariable,
+								protocol.SymbolKindFile,
+								protocol.SymbolKindModule,
+								protocol.SymbolKindNamespace,
+								protocol.SymbolKindPackage,
+								protocol.SymbolKindClass,
+								protocol.SymbolKindMethod,
+								protocol.SymbolKindProperty,
+								protocol.SymbolKindField,
+								protocol.SymbolKindConstructor,
 								protocol.SymbolKindEnum,
+								protocol.SymbolKindInterface,
+								protocol.SymbolKindFunction,
+								protocol.SymbolKindVariable,
+								protocol.SymbolKindConstant,
+								protocol.SymbolKindString,
+								protocol.SymbolKindNumber,
+								protocol.SymbolKindBoolean,
+								protocol.SymbolKindArray,
+								protocol.SymbolKindObject,
+								protocol.SymbolKindKey,
+								protocol.SymbolKindNull,
+								protocol.SymbolKindEnumMember,
+								protocol.SymbolKindStruct,
+								protocol.SymbolKindEvent,
+								protocol.SymbolKindOperator,
+								protocol.SymbolKindTypeParameter,
 							},
 						},
 					},
+				},
+				Window: &protocol.WindowClientCapabilities{
+					WorkDoneProgress: true,
 				},
 				TextDocument: &protocol.TextDocumentClientCapabilities{
 					Synchronization: &protocol.TextDocumentSyncClientCapabilities{
@@ -199,8 +229,9 @@ func main() {
 					URI:  fmt.Sprintf("file://%s", qmkFirmwareDir),
 				},
 			},
+			ProcessID: int32(proc.Pid()),
 		},
-		Capabilities: clangdlsp.ClientCapabilities{
+		InitializationOptions: clangdlsp.InitializationOptions{
 			ClangdFileStatus: true,
 		},
 	})

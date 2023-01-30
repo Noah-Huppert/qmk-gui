@@ -32,10 +32,10 @@ func NewClangdServer(conn jsonrpc2.Conn, logger *zap.Logger) ClangdServer {
 type InitializeParams struct {
 	protocol.InitializeParams
 
-	Capabilities ClientCapabilities `json:"capabilities"`
+	InitializationOptions InitializationOptions `json:"initializationOptions"`
 }
 
-type ClientCapabilities struct {
+type InitializationOptions struct {
 	// Enables the ClangD file status extension
 	// https://clangd.llvm.org/extensions#file-status
 	ClangdFileStatus bool `json:"clangdFileStatus"`
