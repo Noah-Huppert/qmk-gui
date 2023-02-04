@@ -152,10 +152,52 @@ func main() {
 	defer logger.Sync()
 
 	// Start LSP server
-	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd", []string{})
+	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd", []string{"--flog=verbose", "--limit-results=0"})
 	if err != nil {
 		logger.Fatal("failed to run C LSP", zap.Error(err))
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Millisecond * 200)
+
+		line := ""
+
+		for {
+			select {
+			case <-ticker.C:
+				stderrBuff := make([]byte, 2048)
+				n, err := proc.ReadStderr(stderrBuff)
+				if err != nil {
+					logger.Error("failed to read LSP stderr (used for debug msgs usually)", zap.Error(err))
+				}
+
+				if n > 0 {
+					decoded := string(stderrBuff)
+
+					for _, char := range decoded {
+						charStr := string(char)
+
+						if charStr == "\u0000" {
+							continue
+						}
+
+						if charStr == "\n" && len(line) > 0 {
+							logger.Debug("clangd", zap.String("line", line))
+							line = ""
+						} else if charStr != "\n" {
+							line += charStr
+						}
+					}
+				}
+			case <-proc.Done():
+				if len(line) > 0 {
+					logger.Debug("clangd", zap.String("line", line), zap.Bool("flush", true))
+				}
+				logger.Debug("LSP process done")
+				return
+			}
+		}
+	}()
 
 	logger.Info("running lsp")
 
@@ -326,7 +368,7 @@ func main() {
 	// Doesn't seem like a blank search can be provided
 	<-backgroundIndexDone
 	symbols, err := server.Symbols(ctx, &protocol.WorkspaceSymbolParams{
-		Query: "KC",
+		Query: "",
 		WorkDoneProgressParams: protocol.WorkDoneProgressParams{
 			WorkDoneToken: protocol.NewProgressToken("symbols"),
 		},
