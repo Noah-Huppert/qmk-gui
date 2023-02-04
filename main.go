@@ -152,7 +152,7 @@ func main() {
 	defer logger.Sync()
 
 	// Start LSP server
-	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd", []string{"--flog=verbose", "--limit-results=0"})
+	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd", []string{"--log=verbose", "--limit-results=0"})
 	if err != nil {
 		logger.Fatal("failed to run C LSP", zap.Error(err))
 	}
