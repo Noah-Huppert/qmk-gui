@@ -181,23 +181,14 @@ func main() {
 							continue
 						}
 
-						if charStr == "\n" && len(line) > 0 {
-							logger.Debug("clangd", zap.String("line", line))
-							line = ""
-						} else if charStr != "\n" {
-							line += charStr
+	// Start LSP server
+	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd", []string{
+		//"--log=verbose",
+		"--limit-results=0",
+	})
+	if err != nil {
+		logger.Fatal("failed to run C LSP", zap.Error(err))
 						}
-					}
-				}
-			case <-proc.Done():
-				if len(line) > 0 {
-					logger.Debug("clangd", zap.String("line", line), zap.Bool("flush", true))
-				}
-				logger.Debug("LSP process done")
-				return
-			}
-		}
-	}()
 
 	logger.Info("running lsp")
 
@@ -380,8 +371,6 @@ func main() {
 	logger.Info("symbols", zap.Any("symbols", symbols))
 
 	// Cleanup server
-	time.Sleep(time.Second * 10)
-
 	if err := docColl.CloseAll(ctx); err != nil {
 		logger.Fatal("failed to send close events for documents: %s", zap.Error(err))
 	}

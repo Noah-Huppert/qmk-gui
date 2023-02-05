@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -83,6 +84,48 @@ func (cmd CmdCloser) watchdog() {
 		cmd.cancelCtx()
 	case <-cmd.Done():
 		return
+	}
+}
+
+func (cmd CmdCloser) StderrLogger() {
+	ticker := time.NewTicker(time.Millisecond * 200)
+
+	line := ""
+
+	for {
+		select {
+		case <-ticker.C:
+			stderrBuff := make([]byte, 2048)
+			n, err := cmd.ReadStderr(stderrBuff)
+			if err != nil {
+				cmd.logger.Error("failed to read stderr (used for debug msgs usually)", zap.Error(err))
+			}
+
+			if n > 0 {
+				decoded := string(stderrBuff)
+
+				for _, char := range decoded {
+					charStr := string(char)
+
+					if charStr == "\u0000" {
+						continue
+					}
+
+					if charStr == "\n" && len(line) > 0 {
+						cmd.logger.Debug("output", zap.String("line", line))
+						line = ""
+					} else if charStr != "\n" {
+						line += charStr
+					}
+				}
+			}
+		case <-cmd.Done():
+			if len(line) > 0 {
+				cmd.logger.Debug("output", zap.String("line", line), zap.Bool("flush", true))
+			}
+			cmd.logger.Debug("process done")
+			return
+		}
 	}
 }
 
