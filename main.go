@@ -1,25 +1,18 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
-
-	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 	"go.uber.org/zap"
 
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"embed"
 
 	"github.com/Noah-Huppert/qmk-gui/clangdlsp"
-	"github.com/Noah-Huppert/qmk-gui/cmd"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -48,126 +41,6 @@ func (a *App) startup(ctx context.Context) {
 // Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
-}
-
-// JSON RPC connection handler.
-type ClientHandler struct {
-	logger              *zap.Logger
-	backgroundIndexDone chan int
-}
-
-// A handler for JSON RPC responses which just logs the request.
-func (h ClientHandler) Handle(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
-	// Handle known notifications
-	if req.Method() == protocol.MethodProgress {
-		// Progress notification
-		params := protocol.ProgressParams{}
-		if err := json.Unmarshal(req.Params(), &params); err != nil {
-			return fmt.Errorf("failed to unmarshall progress notification params: %s", err)
-		}
-
-		// Handle known progress tokens
-		if params.Token.String() == clangdlsp.ProgressTokenBackgroundIndexProgress {
-			// Clangd background index progress
-			bgIdxParams := clangdlsp.BackgroundIndexProgressParams{}
-			if err := json.Unmarshal(req.Params(), &bgIdxParams); err != nil {
-				return fmt.Errorf("failed to unmarshall background index progress params: %s", err)
-			}
-
-			// Send message on channel if the background indexing is complete
-			if bgIdxParams.Value.Kind == clangdlsp.BackgroundIndexProgressEnd {
-				h.backgroundIndexDone <- 0
-			}
-		}
-	}
-
-	// Reply with null to meat JSON spec
-	h.logger.Debug("received response over connection", zap.Any("req", req))
-	return reply(ctx, nil, nil)
-}
-
-// Wraps the LSP did open and did close flow.
-type LSPDocument struct {
-	server protocol.Server
-	uri    uri.URI
-}
-
-// Opens a file.
-func (doc LSPDocument) Open(ctx context.Context) error {
-	// Read file
-	fileBytes, err := os.ReadFile(doc.uri.Filename())
-	if err != nil {
-		return fmt.Errorf("failed to read file contents: %s", err)
-	}
-	fileContents := bytes.NewBuffer(fileBytes).String()
-
-	// Call LSP open
-	err = doc.server.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{
-		TextDocument: protocol.TextDocumentItem{
-			URI:        doc.uri,
-			LanguageID: "c",
-			Version:    0,
-			Text:       fileContents,
-		},
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to call LSP open: %s", err)
-	}
-
-	return nil
-}
-
-// Closes a document.
-func (doc LSPDocument) Close(ctx context.Context) error {
-	err := doc.server.DidClose(ctx, &protocol.DidCloseTextDocumentParams{
-		TextDocument: protocol.TextDocumentIdentifier{
-			URI: doc.uri,
-		},
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to call LSP close: %s", err)
-	}
-
-	return nil
-}
-
-// Collection of documents.
-type LSPDocumentCollection struct {
-	server    protocol.Server
-	documents []LSPDocument
-}
-
-// Open a file
-func (coll LSPDocumentCollection) Open(ctx context.Context, uri uri.URI) error {
-	doc := LSPDocument{
-		server: coll.server,
-		uri:    uri,
-	}
-	if err := doc.Open(ctx); err != nil {
-		return fmt.Errorf("failed to open document: %s", err)
-	}
-
-	coll.documents = append(coll.documents, doc)
-
-	return nil
-}
-
-func (coll LSPDocumentCollection) CloseAll(ctx context.Context) error {
-	errs := []string{}
-
-	for _, doc := range coll.documents {
-		if err := doc.Close(ctx); err != nil {
-			errs = append(errs, fmt.Sprintf("failed to close %s: %s", doc.uri, err))
-		}
-	}
-
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, ", "))
-	}
-
-	return nil
 }
 
 func main() {
@@ -201,37 +74,6 @@ func main() {
 
 	if err != nil {
 		println("Error:", err.Error())
-	}
-
-	// Start LSP server
-	proc, err := cmd.NewCmdCloser(ctx, logger, "clangd", []string{
-		//"--log=verbose",
-		"--limit-results=0",
-	})
-	if err != nil {
-		logger.Fatal("failed to run C LSP", zap.Error(err))
-	}
-
-	logger.Info("running lsp")
-
-	stream := jsonrpc2.NewStream(proc)
-	conn := jsonrpc2.NewConn(stream)
-
-	backgroundIndexDone := make(chan int)
-
-	go func() {
-		handler := ClientHandler{
-			logger:              logger,
-			backgroundIndexDone: backgroundIndexDone,
-		}
-		conn.Go(ctx, handler.Handle)
-	}()
-
-	//client := protocol.ClientDispatcher(conn, logger)
-	server := clangdlsp.NewClangdServer(conn, logger)
-	docColl := LSPDocumentCollection{
-		server:    server.Server,
-		documents: []LSPDocument{},
 	}
 
 	// Initialize LSP
